@@ -1,0 +1,18 @@
+#!/bin/bash
+# Build a deployment zip file.  Contains any special 
+# gems that are not part of the usual AWS SDK, which 
+# is already available in the Lambda environment
+
+set -e
+
+ROOT=$(cd -P -- "$(dirname -- "$0")/.." && printf '%s\n' "$(pwd -P)")
+
+cd $ROOT
+
+rm -f $ROOT/deploy.zip
+
+docker build -t rdsosmetrics .
+docker create --name rdsosmetrics_container rdsosmetrics
+docker cp rdsosmetrics_container:/usr/src/app/deploy.zip .
+docker rm rdsosmetrics_container
+

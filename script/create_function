@@ -1,0 +1,56 @@
+#!/bin/bash
+options=$(getopt --long profile:,region:,name: -- "" "$@")
+#echo "options: $options"
+if [ $? != 0 ]; then
+    echo "USAGE: $0 --profile me --region us-east-1 --name MyRDSOSMetricsPublisher "
+    echo
+    echo "Create the Lambda function for [name]"
+    exit 1
+fi
+eval set -- "$options"
+PROFILE=""
+REGION=""
+NAME=""
+while true; do
+    case "$1" in
+    --profile)
+        PROFILE="--profile $2"
+        shift 2;
+        ;;
+    --region)
+        REGION="--region $2"
+        shift 2;
+        ;;
+    --name)
+        NAME="$2"
+        shift 2;
+        ;;
+    --)
+        shift
+        break
+        ;;
+    *)
+        break
+        ;;
+    esac
+done
+ROOT=$(cd -P -- "$(dirname -- "$0")/.." && printf '%s\n' "$(pwd -P)")
+
+set -x
+
+cd $ROOT
+
+# Create IAM role
+role_arn=$(aws $PROFILE $REGION iam create-role --role-name $NAME --assume-role-policy-document '{"Version": "2012-10-17","Statement": [{"Effect": "Allow","Principal": {"Service": ["lambda.amazonaws.com"]},"Action": "sts:AssumeRole"}]}' | jq -r '.Role.Arn')
+
+# Create an IAM policy with only the permissions we need
+policy_arn=$(aws $PROFILE $REGION iam create-policy --policy-name $NAME --policy-document '{"Version": "2012-10-17","Statement": [{"Effect": "Allow","Action":["logs:CreateLogGroup","logs:CreateLogStream","logs:PutLogEvents","logs:GetLogEvents","cloudwatch:PutMetricData","rds:DescribeDBInstances"],"Resource":"*"}]}' | jq -r '.Policy.Arn')
+
+# Attach the policy to the role
+aws $PROFILE $REGION iam attach-role-policy --role-name $NAME --policy-arn $policy_arn 
+
+# Sleep just a bit for the IAM things to do whatever they do.
+# Without this I get "The role defined for the function cannot be assumed by Lambda."
+sleep 10
+
+aws $PROFILE $REGION lambda create-function --function-name $NAME --runtime ruby2.7 --timeout 20 --memory-size 128 --handler handler.handler --role $role_arn --zip-file fileb://$ROOT/deploy.zip

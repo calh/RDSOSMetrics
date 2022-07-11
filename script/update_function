@@ -1,0 +1,42 @@
+#!/bin/bash
+options=$(getopt --long profile:,region:,name: -- "" "$@")
+#echo "options: $options"
+if [ $? != 0 ]; then
+    echo "USAGE: $0 --profile me --region us-east-1 --name MyRDSOSMetricsPublisher "
+    echo
+    echo "Update new function code to the Lambda function for [name]"
+    exit 1
+fi
+eval set -- "$options"
+PROFILE=""
+REGION=""
+NAME=""
+while true; do
+    case "$1" in
+    --profile)
+        PROFILE="--profile $2"
+        shift 2;
+        ;;
+    --region)
+        REGION="--region $2"
+        shift 2;
+        ;;
+    --name)
+        NAME="$2"
+        shift 2;
+        ;;
+    --)
+        shift
+        break
+        ;;
+    *)
+        break
+        ;;
+    esac
+done
+ROOT=$(cd -P -- "$(dirname -- "$0")/.." && printf '%s\n' "$(pwd -P)")
+
+set -x
+cd $ROOT
+
+aws $PROFILE $REGION lambda update-function-code --function-name $NAME --publish --zip-file fileb://$ROOT/deploy.zip
