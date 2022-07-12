@@ -179,3 +179,4 @@ This would allow CloudWatch to offer better statistics like percentiles, IQM, WM
 * Option to publish more metrics like uptime, disk IO, network IO, load average.  Although
 most of these are available in some other form, they're a little more annoying to work with.
 (EX:  Load average comes from Logs Insights, which is annoying to run stats and aggregations with)
+* Option to monitor mysql instances.  Categorize the various mysqld processes.
