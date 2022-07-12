@@ -1,4 +1,5 @@
 require 'json'
+require 'bigdecimal'
 require 'aws-sdk-rds'
 require 'aws-sdk-cloudwatchlogs'
 require 'aws-sdk-cloudwatch'
@@ -39,52 +40,8 @@ def handler(event:, context:)
     start_time: (Time.now - ChronicDuration.parse(interval)).to_i * 1000
   })
 
-  # Aggregation of all metrics for this time interval
-  # [ dimensions ] => value
-  sums = {}
-  event_count = 0
-
-  events.events.each do |event|
-    timestamp = Time.at(event.timestamp / 1000)
-    data = JSON.parse(event.message)
-    data['processList'].each do |process|
-      dimension = parse_process_dimension(instance_id, process['name'])
-      # Other interesting metrics are available here, like vss and rss, but I'm more 
-      # interested in just percentages
-      sums[ dimension + [{name:"metric",value:"CPU"}] ] ||= 0 
-      sums[ dimension + [{name:"metric",value:"CPU"}] ] += process['cpuUsedPc'].to_f
-      #if process['cpuUsedPc'].to_f > sums[ dimension + [{name:"metric",value:"CPU"}] ].to_f
-      #  sums[ dimension + [{name:"metric",value:"CPU"}] ] = process['cpuUsedPc'].to_f
-      #end
-
-      sums[ dimension + [{name:"metric",value:"Memory"}] ] ||= 0
-      sums[ dimension + [{name:"metric",value:"Memory"}] ] += process['memoryUsedPc'].to_f
-      #if process['memoryUsedPc'].to_f > sums[ dimension + [{name:"metric",value:"Memory"}] ]
-      #  sums[ dimension + [{name:"metric",value:"Memory"}] ] = process['memoryUsedPc'].to_f
-      #end
-    end
-    event_count += 1
-  end
-
-  # Iterate over the sums and publish average statistics
-  # for this time interval
-  cw = Aws::CloudWatch::Client.new
-  sums.each do |dimension, value|
-    metric_name = dimension.pop[:value]
-    cw.put_metric_data({
-      namespace: "RDS_OS_Metrics",
-      metric_data: [{
-        metric_name: metric_name,
-        timestamp: Time.now,
-        unit: "Percent",
-        # divide by event count for average
-        value: (value.to_f / event_count.to_f),
-        # NOTE:  Do we want to use the max instead?
-        #value: value.to_f,
-        dimensions: dimension
-      }]
-    })
-  end
+  publish_rds_os_metrics(instance_id, events)
+  publish_rds_cpu_metrics(instance_id, events)
 
 rescue => e
   puts "Exception: #{e.message}"
@@ -115,4 +72,135 @@ def parse_process_dimension(instance_id, name)
   end
 
   dimension
+end
+
+# Publish total CPU metrics for guest, irq, system, 
+# wait, idle, user, steal, nice, and total.
+def publish_rds_cpu_metrics(instance_id, events)
+  sums = {}
+  minimums = {}
+  maximums = {}
+  event_count = 0
+
+  events.events.each do |event|
+    timestamp = Time.at(event.timestamp / 1000)
+    data = JSON.parse(event.message)
+    data['cpuUtilization'].each do |metric, value|
+      dimension = [
+        { name: "rds_instance", value: instance_id },
+        { name: "metric", value: metric }
+      ]
+      sums[dimension] ||= 0
+      sums[dimension] += value
+
+      minimums[dimension] ||= BigDecimal('Infinity')
+      if value.to_f < minimums[dimension]
+        minimums[dimension] = value.to_f
+      end
+
+      maximums[dimension] ||= BigDecimal('-Infinity')
+      if value.to_f > maximums[dimension]
+        maximums[dimension] = value.to_f
+      end
+    end
+    event_count += 1
+  end
+
+  cw = Aws::CloudWatch::Client.new
+  sums.keys.each do |dimension|
+    metric_name = dimension.last[:value]
+    cw.put_metric_data({
+      namespace: "RDS_CPU_Metrics",
+      metric_data: [{
+        metric_name: metric_name,
+        timestamp: Time.now,
+        unit: "Percent",
+        statistic_values: {
+          sample_count: event_count,
+          sum: sums[dimension],
+          minimum: minimums[dimension],
+          maximum: maximums[dimension]
+        },
+        # divide by event count for average
+        # NOTE: statistic_values and value are mutually exclusive
+        #value: (sums[dimension].to_f / event_count.to_f),
+        dimensions: dimension[0..-2]
+      }]
+    })
+  end
+
+end
+
+# Publish per-process (categoried) CPU and memory 
+# utilization
+def publish_rds_os_metrics(instance_id, events)
+  # Aggregation of all metrics for this time interval
+  # [ dimensions ] => value
+  sums = {}
+  minimums = {}
+  maximums = {}
+  event_count = 0
+
+  events.events.each do |event|
+    timestamp = Time.at(event.timestamp / 1000)
+    data = JSON.parse(event.message)
+    data['processList'].each do |process|
+      dimension = parse_process_dimension(instance_id, process['name'])
+      # Other interesting metrics are available here, like vss and rss, but I'm more 
+      # interested in just percentages
+      sums[ dimension + [{name:"metric",value:"CPU"}] ] ||= 0 
+      sums[ dimension + [{name:"metric",value:"CPU"}] ] += process['cpuUsedPc'].to_f
+
+      minimums[ dimension + [{name:"metric",value:"CPU"}] ] ||= BigDecimal('Infinity')
+      if process['cpuUsedPc'].to_f < minimums[ dimension + [{name:"metric",value:"CPU"}] ]
+        minimums[ dimension + [{name:"metric",value:"CPU"}] ] = process['cpuUsedPc'].to_f
+      end
+
+      maximums[ dimension + [{name:"metric",value:"CPU"}] ] ||= BigDecimal('-Infinity')
+      if process['cpuUsedPc'].to_f > maximums[ dimension + [{name:"metric",value:"CPU"}] ]
+        maximums[ dimension + [{name:"metric",value:"CPU"}] ] = process['cpuUsedPc'].to_f
+      end
+
+      sums[ dimension + [{name:"metric",value:"Memory"}] ] ||= 0
+      sums[ dimension + [{name:"metric",value:"Memory"}] ] += process['memoryUsedPc'].to_f
+
+      minimums[ dimension + [{name:"metric",value:"Memory"}] ] ||= BigDecimal('Infinity')
+      if process['memoryUsedPc'].to_f < minimums[ dimension + [{name:"metric",value:"Memory"}] ]
+        minimums[ dimension + [{name:"metric",value:"Memory"}] ] = process['memoryUsedPc'].to_f
+      end
+
+      maximums[ dimension + [{name:"metric",value:"Memory"}] ] ||= BigDecimal('-Infinity')
+      if process['memoryUsedPc'].to_f > maximums[ dimension + [{name:"metric",value:"Memory"}] ]
+        maximums[ dimension + [{name:"metric",value:"Memory"}] ] = process['memoryUsedPc'].to_f
+      end
+
+    end
+    event_count += 1
+  end
+
+  # Iterate over the sums and publish average statistics
+  # for this time interval
+  cw = Aws::CloudWatch::Client.new
+  sums.keys.each do |dimension|
+    metric_name = dimension.last[:value]
+    cw.put_metric_data({
+      namespace: "RDS_OS_Metrics",
+      metric_data: [{
+        metric_name: metric_name,
+        timestamp: Time.now,
+        unit: "Percent",
+        statistic_values: {
+          sample_count: event_count,
+          sum: sums[dimension],
+          minimum: minimums[dimension],
+          maximum: maximums[dimension]
+        },
+        # divide by event count for average
+        # NOTE: statistic_values and value are mutually exclusive
+        #value: (sums[dimension].to_f / event_count.to_f),
+        dimensions: dimension[0..-2]
+      }]
+    })
+  end
+
 end

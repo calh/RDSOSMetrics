@@ -3,7 +3,7 @@
 
 # Set this to your db instance name
 event = {
-  "instance_id" => "my-prod-writer"
+  "instance_id" => ARGV[0]
 }
 
 require "./handler.rb"

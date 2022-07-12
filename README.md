@@ -4,7 +4,7 @@ There are quite a few things going on under the hood of Aurora, some of which mi
 consuming extra resources without much explanation.
 
 For each Aurora Postgres instance, there are `RDS processes`, `Aurora Storage Daemon`, 
-`rsdadmin` background processes, aurora runtimes, and `OS processes`.  You can see 
+`rsdadmin` background processes, aurora runtimes and `OS processes`.  You can see 
 a glimpse of them in the RDS dashboard, under Monitoring -> OS Process List.
 
 After spending months tracking down unexplained CPU utilization, I discovered
@@ -18,6 +18,11 @@ and then publishes custom CloudWatch metrics for a given RDS instance.
 
 (Neat screenshot here)
 
+It also pulls the overall CPU metrics like user CPU, system, IRQ, nice, etc 
+and publishes them as a separate metric.
+
+Inspiration for this project was taken from the [rds top script](https://gist.github.com/matheusoliveira/0e9b13d2fca6e7ab993c03e946806503).
+
 While this was written for Aurora Postgres, it could be tailored for MySQL as well.  
 
 ### First Local Test
@@ -30,12 +35,12 @@ $ bundle install
 $ export AWS_ACCESS_KEY_ID=...
 $ export AWS_SECRET_ACCESS_KEY=...
 $ export AWS_DEFAULT_REGION=...
-$ bundle exec ruby runner.rb
+$ bundle exec ruby runner.rb my-instance-name
 ```
 
 Wait a few minutes, and then check out your [CloudWatch custom metrics](https://us-east-1.console.aws.amazon.com/cloudwatch/home?region=us-east-1#metricsV2).
 
-There should be an `RDS_OS_Metrics` custom namespace with everything fun in it.
+There should be `RDS_OS_Metrics` and `RDS_CPU_Metrics` custom namespaces with everything fun in it.
 
 ### First Deployment
 
@@ -45,6 +50,9 @@ Install Docker for the CI build process
 $ ./script/ci_build
 $ ./script/create_function --profile me --region us-east-1 --name rdsosmetrics
 ```
+
+Note:  You only need one function deployed.  EventBridge Rules can execute 
+the same function for many instance names.
 
 ### Create an EventBridge Rule
 
@@ -98,6 +106,10 @@ Everything else I group into an Other category.
 }
 ```
 
+Note: The metrics have minimum, maximum, sum and count published.  Average
+is derived in CloudWatch.  Since it's hard to catch bursty CPU activity
+over a whole minute, try using stat=Maximum or Sum to see what looks better.
+
 And one for memory, although this isn't as interesting:
 
 
@@ -120,6 +132,30 @@ And one for memory, although this isn't as interesting:
 }
 ```
 
+Switching to overall CPU metrics, create something like:
+
+```
+{
+  "metrics": [
+    [ "RDS_CPU_Metrics", "nice", "rds_instance", "prod-writer" ],
+    [ ".", "irq", ".", "." ],
+    [ ".", "guest", ".", "." ],
+    [ ".", "idle", ".", ".", { "visible": false } ],
+    [ ".", "steal", ".", "." ],
+    [ ".", "user", ".", "." ],
+    [ ".", "wait", ".", "." ],
+    [ ".", "total", ".", "." ],
+    [ ".", "system", ".", "." ]
+  ],
+  "view": "timeSeries",
+  "stacked": false,
+  "region": "us-east-1",
+  "stat": "Average",
+  "period": 60
+}
+
+```
+
 ### Updating New Code
 
 ```
@@ -127,4 +163,13 @@ $ ./script/ci_build
 $ ./script/update_function --profile me --region us-east-1 --name rdsosmetrics
 ```
 
+### Wishlist Items
 
+If anyone would like to add features to this script, here are a few things
+that would be great to have:
+
+* The option to publish per-second granularity metrics for each `RDSOSMetrics` record.
+This would allow CloudWatch to offer better statistics like percentiles, IQM, WM, PR, etc. 
+* Option to publish more metrics like uptime, disk IO, network IO, load average.  Although
+most of these are available in some other form, they're a little more annoying to work with.
+(EX:  Load average comes from Logs Insights, which is annoying to run stats and aggregations with)
