@@ -16,10 +16,16 @@ This Lambda script pulls metrics from the CloudWatch RDSOSMetrics logs,
 parses the CPU and memory utilization for each PID, aggregates, categorizes
 and then publishes custom CloudWatch metrics for a given RDS instance.
 
-(Neat screenshot here)
+#### OS Metrics CPU Utilization
+![OS Metrics CPU Utilization](/screenshots/os_metrics.png)
+
+#### OS Metrics Memory Utilization
+![OS Metrics Memory Utilization](/screenshots/os_memory_metrics.png)
 
 It also pulls the overall CPU metrics like user CPU, system, IRQ, nice, etc 
 and publishes them as a separate metric.
+
+![CPU Metrics](/screenshots/cpu_metrics.png)
 
 Inspiration for this project was taken from the [rds top script](https://gist.github.com/matheusoliveira/0e9b13d2fca6e7ab993c03e946806503).
 
